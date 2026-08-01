@@ -6947,6 +6947,25 @@ def _desktop_launch_options() -> tuple[list[str], str]:
     return flags, disable_gpu
 
 
+def _register_linux_desktop_entry() -> None:
+    """Install the XDG desktop entry for Hermes Desktop (Linux only, best-effort).
+
+    Gives the Electron app a launcher presence (menu item + icon) with an
+    absolute ``Exec`` and ``Icon`` so it works outside a login shell. Removed
+    again by ``hermes uninstall --gui``.
+    """
+    try:
+        from hermes_cli.linux_desktop_entry import install_desktop_entry, is_supported
+
+        if not is_supported():
+            return
+        entry = install_desktop_entry(PROJECT_ROOT)
+        if entry:
+            print(f"✓ Desktop launcher entry installed: {entry}")
+    except Exception as exc:  # never block a launch on launcher plumbing
+        print(f"⚠ Could not install the desktop launcher entry: {exc}")
+
+
 def cmd_gui(args: argparse.Namespace):
     """Build and launch the native Electron desktop GUI."""
     desktop_dir = PROJECT_ROOT / "apps" / "desktop"
@@ -7147,6 +7166,11 @@ def cmd_gui(args: argparse.Namespace):
 
             # Build succeeded — write the stamp so next run can skip
             _write_desktop_build_stamp(PROJECT_ROOT, source_mode=source_mode)
+
+    # Linux: register the app in the desktop launcher so Hermes shows up in
+    # the application menu with its icon. Best-effort and idempotent — a
+    # failure here must never stop the app from launching.
+    _register_linux_desktop_entry()
 
     # --build-only: produce the artifact but do NOT launch. The installer's
     # --update flow drives the rebuild headlessly and then launches the desktop
