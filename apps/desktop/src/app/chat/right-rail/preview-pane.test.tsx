@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { $connection } from '@/store/session'
 
 import { PreviewPane } from './preview-pane'
+import { forgetPreviewStripTools, previewConsoleState } from './preview-strip-tools'
 
 describe('PreviewPane console state', () => {
   beforeEach(() => {
@@ -34,7 +35,6 @@ describe('PreviewPane console state', () => {
     await act(async () => {
       render(
         <PreviewPane
-          setTitlebarToolGroup={vi.fn()}
           target={{
             kind: 'file',
             label: 'file.txt',
@@ -51,14 +51,19 @@ describe('PreviewPane console state', () => {
     expect(onPreviewFileChanged).not.toHaveBeenCalled()
   })
 
-  it('does not rebuild the pane titlebar group for streamed console logs', async () => {
-    const setTitlebarToolGroup = vi.fn()
+  // The console lives in the TAB's store (the toggles sit on the tab, not in the
+  // titlebar), so a streamed log has to land in the store keyed by tabId — that
+  // is what both the panel in the pane and the button on the tab read.
+  it('streams console logs into the tab-keyed console store', async () => {
+    const tabId = 'url:http://localhost:5174'
+
+    forgetPreviewStripTools(tabId)
 
     let rendered!: ReturnType<typeof render>
     await act(async () => {
       rendered = render(
         <PreviewPane
-          setTitlebarToolGroup={setTitlebarToolGroup}
+          tabId={tabId}
           target={{
             kind: 'url',
             label: 'Preview',
@@ -69,7 +74,6 @@ describe('PreviewPane console state', () => {
       )
     })
 
-    const initialCalls = setTitlebarToolGroup.mock.calls.length
     const webview = rendered.container.querySelector('webview')
 
     expect(webview).toBeInstanceOf(HTMLElement)
@@ -84,6 +88,8 @@ describe('PreviewPane console state', () => {
       )
     })
 
-    expect(setTitlebarToolGroup).toHaveBeenCalledTimes(initialCalls)
+    expect(previewConsoleState(tabId).$logs.get().at(-1)?.message).toBe('streamed log line')
+
+    forgetPreviewStripTools(tabId)
   })
 })
