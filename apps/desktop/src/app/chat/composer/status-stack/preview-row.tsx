@@ -8,9 +8,7 @@ import { Tip } from '@/components/ui/tooltip'
 import { useI18n } from '@/i18n'
 import { normalizeOrLocalPreviewTarget } from '@/lib/local-preview'
 import { cn } from '@/lib/utils'
-import { PREVIEW_PANE_ID } from '@/store/layout'
 import { notifyError } from '@/store/notifications'
-import { $paneOpen } from '@/store/panes'
 import { $previewTabSources, closePreviewForSource, openPreview } from '@/store/preview'
 import { type PreviewArtifact } from '@/store/preview-status'
 
@@ -23,9 +21,9 @@ interface PreviewStatusRowProps {
 export const PreviewStatusRow = memo(function PreviewStatusRow({ item, onDismiss }: PreviewStatusRowProps) {
   const { t } = useI18n()
   const openSources = useStore($previewTabSources)
-  const previewPaneOpen = useStore($paneOpen(PREVIEW_PANE_ID))
   const [opening, setOpening] = useState(false)
-  const isOpen = openSources.includes(item.target) && previewPaneOpen
+  // A tab open IS a pane in the tree now, so its presence is the whole answer.
+  const isOpen = openSources.includes(item.target)
 
   const resolveTarget = async () => {
     const target = await normalizeOrLocalPreviewTarget(item.target, item.cwd || undefined)

@@ -3,8 +3,7 @@ import { atom, computed } from 'nanostores'
 import { persistentAtom } from '@/lib/persisted'
 import { normalize } from '@/lib/text'
 
-import { $rightRailActiveTabId, PREVIEW_PANE_ID, type RightRailTabId, selectRightRailTab } from './layout'
-import { setPaneOpen } from './panes'
+import { $rightRailActiveTabId, type RightRailTabId, selectRightRailTab } from './layout'
 
 /**
  * PREVIEW RAIL — one list of tabs, one way in.
@@ -140,9 +139,6 @@ export const $previewTarget = computed(
 export const $previewTabSources = computed($previewTabs, tabs => tabs.map(tab => tab.target.source))
 
 export const $previewReloadRequest = atom(0)
-/** Bumped by every `openPreview` call so the layout can reveal the pane even
- *  when the tab already existed (re-opening a hidden pane must still show it). */
-export const $previewOpenRequest = atom(0)
 export const $previewServerRestart = atom<PreviewServerRestart | null>(null)
 export const $previewServerRestartStatus = computed($previewServerRestart, restart => restart?.status ?? 'idle')
 
@@ -164,9 +160,9 @@ function previewTargetForSource(target: PreviewTarget, source: PreviewRecordSour
   return { ...target, renderMode: isFilePreviewSource(source) ? 'source' : 'preview' }
 }
 
-/** Open (or re-front) the rail tab for `target`. Re-opening an existing tab
- *  refreshes its target so a stale label/path can't outlive the thing it
- *  points at. The only way anything reaches the preview rail. */
+/** Open (or re-front) the tab for `target`. Re-opening an existing tab refreshes
+ *  its target so a stale label/path can't outlive the thing it points at. The
+ *  only way anything reaches a preview. */
 export function openPreview(target: PreviewTarget, source: PreviewRecordSource = 'manual') {
   const resolved = previewTargetForSource(target, source)
   const id = previewTabId(resolved)
@@ -175,12 +171,10 @@ export function openPreview(target: PreviewTarget, source: PreviewRecordSource =
   const tab: PreviewTab = { id, target: resolved }
 
   $previewTabs.set(index === -1 ? [...current, tab] : current.map((item, i) => (i === index ? tab : item)))
-  setPaneOpen(PREVIEW_PANE_ID, true)
   selectRightRailTab(id)
-  $previewOpenRequest.set($previewOpenRequest.get() + 1)
 }
 
-export function closeRightRailTab(tabId: RightRailTabId) {
+export function closeRightRailTab(tabId: string) {
   const current = $previewTabs.get()
   const index = current.findIndex(tab => tab.id === tabId)
 
@@ -197,7 +191,7 @@ export function closeRightRailTab(tabId: RightRailTabId) {
   }
 
   if (next.length === 0) {
-    setPaneOpen(PREVIEW_PANE_ID, false)
+    selectRightRailTab(null)
   }
 }
 
@@ -263,11 +257,10 @@ export function closeRightRailTabsToRight(tabId: RightRailTabId) {
   }
 }
 
-/** Close every tab so the rail pane unmounts. */
+/** Close every tab so the rail's panes leave the tree. */
 export function closeRightRail() {
   $previewTabs.set([])
   selectRightRailTab(null)
-  setPaneOpen(PREVIEW_PANE_ID, false)
 }
 
 export function requestPreviewReload() {

@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { $rightRailActiveTabId, PREVIEW_PANE_ID } from './layout'
-import { $paneOpen } from './panes'
+import { $rightRailActiveTabId } from './layout'
 import {
   $previewServerRestart,
   $previewServerRestartStatus,
@@ -58,7 +57,6 @@ describe('preview store', () => {
   it('opens the pane and fronts the new tab', () => {
     openPreview(fileTarget('/work/demo.html'), 'tool-result')
 
-    expect($paneOpen(PREVIEW_PANE_ID).get()).toBe(true)
     expect($rightRailActiveTabId.get()).toBe('file:file:///work/demo.html')
     expect($previewTarget.get()?.path).toBe('/work/demo.html')
   })
@@ -89,19 +87,17 @@ describe('preview store', () => {
     expect($previewTarget.get()?.renderMode).toBe('preview')
   })
 
-  it('falls back to a neighbouring tab when the active one closes, and shuts the pane on the last', () => {
+  it('falls back to a neighbouring tab when the active one closes, and clears the selection on the last', () => {
     openPreview(fileTarget('/work/one.html'), 'file-browser')
     openPreview(fileTarget('/work/two.html'), 'file-browser')
 
     closeRightRailTab(previewTabId(fileTarget('/work/two.html')))
 
     expect($previewTarget.get()?.path).toBe('/work/one.html')
-    expect($paneOpen(PREVIEW_PANE_ID).get()).toBe(true)
 
     expect(closeActiveRightRailTab()).toBe(true)
     expect($previewTarget.get()).toBeNull()
     expect($rightRailActiveTabId.get()).toBeNull()
-    expect($paneOpen(PREVIEW_PANE_ID).get()).toBe(false)
   })
 
   it('reports nothing to close when the rail is empty, so the shortcut falls through', () => {
