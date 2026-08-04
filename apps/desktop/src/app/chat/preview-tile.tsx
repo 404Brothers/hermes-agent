@@ -10,8 +10,11 @@
  * one bar instead of two.
  */
 
+import { findGroup } from '@/components/pane-shell/tree/model'
+import { $activeTreeGroup, $layoutTree, revealTreePane } from '@/components/pane-shell/tree/store'
 import { FileTypeIcon } from '@/components/ui/file-type-icon'
 import { ToolIcon } from '@/components/ui/tool-icon'
+import { $rightRailActiveTabId, type RightRailTabId, selectRightRailTab } from '@/store/layout'
 import { $previewTabs, closeRightRailTab, type PreviewTarget } from '@/store/preview'
 
 import { paneMirror } from './pane-mirror'
@@ -69,8 +72,55 @@ function PreviewTabLead({ tabId }: { tabId: string }) {
 
 const PREVIEW_TILE_PREFIX = 'preview-tile'
 
-/** Keep pane contributions mirroring `$previewTabs`. Call once from the root. */
-export const watchPreviewTiles = paneMirror<{ id: string }>({
+/** Keep pane contributions mirroring `$previewTabs`, keep the store's selection
+ *  and the tree's active pane agreeing, and front a tile when its tab is
+ *  selected. Call once from the root. */
+export function watchPreviewTiles(): void {
+  watchPreviewTileMirror()
+
+  // The reveal analog of session tiles (session-states calls revealTreePane on
+  // open): `openPreview` selects the tab, and the TREE must front its pane —
+  // un-minimize, un-hide, activate in its zone. Both stores, because re-opening
+  // the already-active tab changes only `$previewTabs` (fresh tab object), while
+  // switching tabs changes only the active id.
+  const reveal = () => {
+    const tabId = $rightRailActiveTabId.get()
+
+    if (tabId && targetFor(tabId)) {
+      revealTreePane(`${PREVIEW_TILE_PREFIX}:${tabId}`)
+    }
+  }
+
+  $rightRailActiveTabId.listen(reveal)
+  $previewTabs.listen(reveal)
+
+  // And the reverse: clicking a preview TAB activates its pane in the TREE
+  // only, so the store's selection must follow or `$previewTarget` (⌘L quote
+  // labels, the titlebar's has-preview state) keeps reporting the previous
+  // tab. Same derivation `$focusedStoredSessionId` uses: the interacted zone's
+  // active pane names the tab. Converges with `reveal` — re-selecting the id
+  // the tree already fronts is a no-op in both directions.
+  const follow = () => {
+    const tree = $layoutTree.get()
+    const groupId = $activeTreeGroup.get()
+    const active = groupId && tree ? findGroup(tree, groupId)?.active : undefined
+
+    if (!active?.startsWith(`${PREVIEW_TILE_PREFIX}:`)) {
+      return
+    }
+
+    const tabId = active.slice(PREVIEW_TILE_PREFIX.length + 1) as RightRailTabId
+
+    if (targetFor(tabId) && $rightRailActiveTabId.get() !== tabId) {
+      selectRightRailTab(tabId)
+    }
+  }
+
+  $layoutTree.listen(follow)
+  $activeTreeGroup.listen(follow)
+}
+
+const watchPreviewTileMirror = paneMirror<{ id: string }>({
   source: $previewTabs,
   key: tab => tab.id,
   prefix: PREVIEW_TILE_PREFIX,
