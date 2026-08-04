@@ -218,45 +218,6 @@ export function closeArtifactPreviewTabs() {
   }
 }
 
-/** Close the tab the right rail is actually showing. Returns false when nothing
- *  closed, so ⌘W can fall through to the next handler. */
-export function closeActiveRightRailTab(): boolean {
-  const tab = activePreviewTab()
-
-  if (!tab) {
-    return false
-  }
-
-  closeRightRailTab(tab.id)
-
-  return true
-}
-
-/** Close every rail tab except `keepId`, then make `keepId` active. */
-export function closeOtherRightRailTabs(keepId: RightRailTabId) {
-  for (const tab of $previewTabs.get()) {
-    if (tab.id !== keepId) {
-      closeRightRailTab(tab.id)
-    }
-  }
-
-  selectRightRailTab(keepId)
-}
-
-/** Close every rail tab positioned after `tabId` (VS Code's "Close to the Right"). */
-export function closeRightRailTabsToRight(tabId: RightRailTabId) {
-  const tabs = $previewTabs.get()
-  const index = tabs.findIndex(tab => tab.id === tabId)
-
-  if (index === -1) {
-    return
-  }
-
-  for (const tab of tabs.slice(index + 1)) {
-    closeRightRailTab(tab.id)
-  }
-}
-
 /** Close every tab so the rail's panes leave the tree. */
 export function closeRightRail() {
   $previewTabs.set([])

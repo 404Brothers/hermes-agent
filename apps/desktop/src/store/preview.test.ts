@@ -7,7 +7,6 @@ import {
   $previewTabs,
   $previewTarget,
   beginPreviewServerRestart,
-  closeActiveRightRailTab,
   closePreviewForSource,
   closeRightRail,
   closeRightRailTab,
@@ -95,13 +94,15 @@ describe('preview store', () => {
 
     expect($previewTarget.get()?.path).toBe('/work/one.html')
 
-    expect(closeActiveRightRailTab()).toBe(true)
+    closeRightRailTab(previewTabId(fileTarget('/work/one.html')))
     expect($previewTarget.get()).toBeNull()
     expect($rightRailActiveTabId.get()).toBeNull()
   })
 
-  it('reports nothing to close when the rail is empty, so the shortcut falls through', () => {
-    expect(closeActiveRightRailTab()).toBe(false)
+  it('ignores a close for a tab that is not open, so the shortcut falls through', () => {
+    closeRightRailTab('file:file:///nowhere.html')
+
+    expect($previewTabs.get()).toHaveLength(0)
   })
 
   it('closes by the raw source the composer rows were handed', () => {
