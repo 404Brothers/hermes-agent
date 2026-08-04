@@ -36,17 +36,30 @@ def _make_desktop_tree(tmp_path: Path) -> Path:
     return root
 
 
-def _make_packaged_executable(root: Path, monkeypatch, platform: str = "darwin") -> Path:
-    monkeypatch.setattr(cli_main.sys, "platform", platform)
+def _make_packaged_executable(root: Path, monkeypatch) -> Path:
+    """Create the packaged-app path layout electron-builder emits on THIS host.
+
+    The layout is keyed off the real ``sys.platform`` rather than a caller-
+    supplied override: ``cmd_gui`` resolves the executable through the same
+    branch, so faking the platform here only proved the test and the code
+    agreed about a host neither was running on.
+
+    Note the Linux arm also lays down ``chrome-sandbox``. ``cmd_gui`` refuses to
+    launch without it (Electron's setuid sandbox helper), which the old
+    darwin-by-default fake concealed — on Linux the packaged tree genuinely has
+    to include it.
+    """
     desktop_dir = root / "apps" / "desktop"
-    if platform == "darwin":
+    if sys.platform == "darwin":
         exe = desktop_dir / "release" / "mac-arm64" / "Hermes.app" / "Contents" / "MacOS" / "Hermes"
-    elif platform == "win32":
+    elif sys.platform == "win32":
         exe = desktop_dir / "release" / "win-unpacked" / "Hermes.exe"
     else:
         exe = desktop_dir / "release" / "linux-unpacked" / "hermes"
-    exe.parent.mkdir(parents=True)
+    exe.parent.mkdir(parents=True, exist_ok=True)
     exe.write_text("", encoding="utf-8")
+    if sys.platform not in ("darwin", "win32"):
+        (exe.parent / "chrome-sandbox").write_text("", encoding="utf-8")
     return exe
 
 
@@ -65,6 +78,7 @@ def test_gui_installs_packages_and_launches_desktop_app(tmp_path, monkeypatch):
          patch("hermes_cli.main._desktop_build_needed", return_value=True), \
          patch("hermes_cli.main._write_desktop_build_stamp"), \
          patch("hermes_cli.main._desktop_macos_relaunchable_fixup"), \
+         patch("hermes_cli.main._desktop_linux_sandbox_fixup", return_value=True), \
          patch("hermes_cli.main.subprocess.run", side_effect=[pack_ok, launch_ok]) as mock_run, \
          pytest.raises(SystemExit) as exc:
         cli_main.cmd_gui(_ns())
@@ -95,7 +109,7 @@ def test_gui_install_env_prepends_managed_node_on_bare_path(tmp_path, monkeypatc
 
     root = _make_desktop_tree(tmp_path)
     monkeypatch.setattr(cli_main, "PROJECT_ROOT", root)
-    _make_packaged_executable(root, monkeypatch, platform="win32")
+    _make_packaged_executable(root, monkeypatch)
 
     # A managed Node tree on disk so with_hermes_node_path() actually prepends it.
     home = tmp_path / "hermes-home"
@@ -107,11 +121,19 @@ def test_gui_install_env_prepends_managed_node_on_bare_path(tmp_path, monkeypatc
     install_ok = subprocess.CompletedProcess(["npm", "ci"], 0)
     launch_ok = subprocess.CompletedProcess(["hermes"], 0)
 
+    # A plain return_value rather than a fixed side_effect list: this test only
+    # cares about the env handed to the npm install, and pinning an exact
+    # sequence of subprocess.run calls makes it fail (StopIteration) whenever
+    # cmd_gui legitimately shells out one extra time — e.g. the Linux sandbox
+    # fixup, which fires on hosts where chrome-sandbox isn't already
+    # root-owned+4755. Assert on the install env, not on a call count.
     with patch("hermes_cli.main._resolve_node_runtime_npm", return_value="/usr/bin/npm"), \
          patch("hermes_cli.main._run_npm_install_deterministic", return_value=install_ok) as mock_install, \
          patch("hermes_cli.main._desktop_build_needed", return_value=True), \
          patch("hermes_cli.main._write_desktop_build_stamp"), \
-         patch("hermes_cli.main.subprocess.run", side_effect=[subprocess.CompletedProcess([], 0), launch_ok]), \
+         patch("hermes_cli.main._desktop_macos_relaunchable_fixup"), \
+         patch("hermes_cli.main._desktop_linux_sandbox_fixup", return_value=True), \
+         patch("hermes_cli.main.subprocess.run", return_value=launch_ok), \
          pytest.raises(SystemExit):
         cli_main.cmd_gui(_ns(skip_build=False))
 
@@ -196,7 +218,7 @@ def test_gui_does_not_retry_after_packaged_executable_exists(tmp_path, monkeypat
     root = _make_desktop_tree(tmp_path)
     monkeypatch.setattr(cli_main, "PROJECT_ROOT", root)
     # Executable EXISTS at failure time → late failure, not a corrupt download.
-    _make_packaged_executable(root, monkeypatch, platform="darwin")
+    _make_packaged_executable(root, monkeypatch)
     monkeypatch.delenv("ELECTRON_MIRROR", raising=False)
 
     install_ok = subprocess.CompletedProcess(["npm", "ci"], 0)
@@ -224,25 +246,74 @@ def test_gui_does_not_retry_after_packaged_executable_exists(tmp_path, monkeypat
 # ── electronDist (re)download helper tests (#47266) ───────────────────
 
 
-@pytest.mark.parametrize(
-    "platform,rel",
-    [
-        ("linux", "dist/electron"),
-        ("win32", "dist/electron.exe"),
-        ("darwin", "dist/Electron.app/Contents/MacOS/Electron"),
-    ],
-)
-def test_electron_dist_ok_per_platform(tmp_path, monkeypatch, platform, rel):
-    monkeypatch.setattr(cli_main.sys, "platform", platform)
-    electron = tmp_path / "node_modules" / "electron"
-    # A dist dir that exists but lacks the binary is NOT ok (partial extraction).
-    (electron / "dist").mkdir(parents=True)
-    assert cli_main._electron_dist_ok(tmp_path) is False
+def test_electron_dist_ok_on_this_host():
+    """A dist dir that exists but lacks the binary is NOT ok (partial extraction).
 
-    binp = electron / rel
-    binp.parent.mkdir(parents=True, exist_ok=True)
-    binp.write_text("", encoding="utf-8")
-    assert cli_main._electron_dist_ok(tmp_path) is True
+    The binary's basename is per-OS (``electron`` / ``electron.exe`` /
+    ``Electron.app/…/Electron``), and ``_electron_dist_binary()`` picks it from
+    the real ``sys.platform``. Asking the implementation for the path it
+    expects — instead of hardcoding one and faking the platform to match —
+    makes this a genuine round-trip on whichever lane runs it.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        electron = root / "node_modules" / "electron"
+        (electron / "dist").mkdir(parents=True)
+        assert cli_main._electron_dist_ok(root) is False
+
+        binp = cli_main._electron_dist_binary(root)
+        # The resolved binary must live under the dist dir we just created.
+        assert (electron / "dist") in binp.parents
+        binp.parent.mkdir(parents=True, exist_ok=True)
+        binp.write_text("", encoding="utf-8")
+        assert cli_main._electron_dist_ok(root) is True
+
+
+@pytest.mark.linux_only
+def test_electron_dist_binary_basename_linux():
+    """``dist/electron`` on Linux — asserted against the live function.
+
+    Split per-OS rather than parametrized over a platform table: the old
+    ``@parametrize(("linux", …), ("win32", …), ("darwin", …))`` skipped the two
+    non-host rows, so outside the Linux lane those two branches were asserted
+    nowhere at all. One marked test per OS puts each row on the lane that can
+    actually execute it.
+    """
+    root = Path("/tmp/does-not-need-to-exist")
+    assert cli_main._electron_dist_binary(root) == (
+        root / "node_modules" / "electron" / "dist" / "electron"
+    )
+
+
+@pytest.mark.windows_only
+def test_electron_dist_binary_basename_windows():
+    """``dist/electron.exe`` on Windows — the ``.exe`` suffix is the whole point."""
+    root = Path("C:/does-not-need-to-exist")
+    assert cli_main._electron_dist_binary(root) == (
+        root / "node_modules" / "electron" / "dist" / "electron.exe"
+    )
+
+
+@pytest.mark.macos_only
+def test_electron_dist_binary_basename_macos():
+    """``dist/Electron.app/Contents/MacOS/Electron`` on macOS.
+
+    The nested ``.app`` bundle path is why #47266's "dist exists but the
+    binary doesn't" check can't just stat the dist directory.
+    """
+    root = Path("/tmp/does-not-need-to-exist")
+    assert cli_main._electron_dist_binary(root) == (
+        root
+        / "node_modules"
+        / "electron"
+        / "dist"
+        / "Electron.app"
+        / "Contents"
+        / "MacOS"
+        / "Electron"
+    )
 
 
 
@@ -346,14 +417,19 @@ def test_desktop_macos_local_codesign_signs_native_binaries(tmp_path, monkeypatc
 
 
 
+@pytest.mark.macos_only
 def test_relaunchable_fixup_falls_back_to_legacy_adhoc_on_failure(tmp_path, monkeypatch, capsys):
-    """A failing stable sign must still leave a launchable (deep ad-hoc) bundle."""
+    """A failing stable sign must still leave a launchable (deep ad-hoc) bundle.
+
+    ``macos_only``: the subject is ``codesign`` against a real ``.app`` bundle
+    layout (``exe.parents[2]``), which only the macOS packaged tree produces.
+    """
     root = _make_desktop_tree(tmp_path)
     desktop_dir = root / "apps" / "desktop"
     monkeypatch.setattr(cli_main, "PROJECT_ROOT", root)
     monkeypatch.delenv("CSC_LINK", raising=False)
     monkeypatch.delenv("APPLE_SIGNING_IDENTITY", raising=False)
-    exe = _make_packaged_executable(root, monkeypatch, platform="darwin")
+    exe = _make_packaged_executable(root, monkeypatch)
     app = exe.parents[2]
 
     calls = []
