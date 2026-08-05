@@ -260,6 +260,12 @@ def _read_referenced_script(path: Path) -> tuple[Optional[str], bool]:
         descriptor = os.open(path, flags)
     except OSError:
         return None, False
+    except ValueError:
+        # A NUL byte embedded in the *path itself* (junk tokens from
+        # tokenizing binary-adjacent command text) raises ValueError, not
+        # OSError. Same class as #76762: a guarded path must never crash
+        # the guard — treat it as "nothing to scan".
+        return None, False
     try:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode):

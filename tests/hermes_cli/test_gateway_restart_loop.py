@@ -695,6 +695,32 @@ class TestLifecycleGuardModule:
         )
         assert result is False
 
+    def test_nul_byte_in_path_token_does_not_crash_guard(self):
+        """Residual #76762 class: when a NUL byte survives into the *path
+        token itself* (tokenized binary-adjacent command text), ``os.open``
+        raises ValueError — not OSError — inside
+        ``_read_referenced_script``. The guard must treat it as "nothing to
+        scan", never crash.
+        """
+        from cron.lifecycle_guard import (
+            contains_gateway_lifecycle_command_or_referenced_script,
+        )
+        result = contains_gateway_lifecycle_command_or_referenced_script(
+            "bash ./run\x00me.sh", cwd="/tmp"
+        )
+        assert result is False
+
+    def test_read_referenced_script_nul_path_returns_nothing_to_scan(self):
+        """Direct unit check on the reader: a Path carrying an embedded NUL
+        returns ``(None, False)`` instead of raising."""
+        from pathlib import Path
+
+        from cron.lifecycle_guard import _read_referenced_script
+
+        text, unsafe = _read_referenced_script(Path("/tmp/run\x00me.sh"))
+        assert text is None
+        assert unsafe is False
+
     def test_shell_script_reference_walk_still_works(self, tmp_path):
         """The referenced-script walk still applies to real shell scripts:
         a .sh script that itself invokes a lifecycle command is caught."""
