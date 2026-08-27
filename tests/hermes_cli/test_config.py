@@ -493,9 +493,12 @@ class TestSaveConfigAtomicity:
             config_path = tmp_path / "config.yaml"
             assert config_path.exists()
 
-            # Simulate a crash during yaml.dump by making atomic_yaml_write's
-            # yaml.dump raise after the temp file is created but before replace.
-            with patch("utils.yaml.dump", side_effect=OSError("disk full")):
+            # Crash on the final swap rather than inside a specific serializer:
+            # save_config picks its writer by whether the file already exists
+            # (PyYAML for a new file, comment-preserving ruamel for an existing
+            # one), and atomic_replace is the last step of both. Patching
+            # yaml.dump here silently stopped exercising the existing-file path.
+            with patch("utils.atomic_replace", side_effect=OSError("disk full")):
                 try:
                     config["model"] = "should-not-persist"
                     save_config(config)
@@ -512,7 +515,7 @@ class TestSaveConfigAtomicity:
             config = load_config()
             save_config(config)
 
-            with patch("utils.yaml.dump", side_effect=OSError("disk full")):
+            with patch("utils.atomic_replace", side_effect=OSError("disk full")):
                 try:
                     save_config(config)
                 except OSError:
@@ -1561,6 +1564,74 @@ class TestBackgroundNotificationsConciseMigration:
 
     def test_default_config_is_concise(self):
         assert DEFAULT_CONFIG["display"]["background_process_notifications"] == "concise"
+
+
+class TestSaveConfigPreservesComments:
+    """A full save must not silently delete the file's comments.
+
+    atomic_yaml_write re-serializes through PyYAML, which has no comment
+    model. Measured 2026-08-27: a v0 → v39 profile migration stripped
+    hand-written rationale from two profile configs — the values were
+    migrated correctly, but the reason they had been chosen was gone.
+    """
+
+    def test_comments_survive_a_full_save(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "# why this model: cheapest one that passes our eval suite\n"
+            "model: test/original\n"
+            "delegation:\n"
+            "  # capped deliberately: the provider rate-limits above three\n"
+            "  max_concurrent_children: 3\n",
+            encoding="utf-8",
+        )
+
+        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+            config = load_config()
+            config["model"] = "test/replacement"
+            save_config(config)
+
+        written = config_path.read_text(encoding="utf-8")
+        assert "cheapest one that passes our eval suite" in written
+        assert "the provider rate-limits above three" in written
+        # The value change still lands, and unrelated user values stay put.
+        raw = yaml.safe_load(written)
+        assert raw["model"] == "test/replacement"
+        assert raw["delegation"]["max_concurrent_children"] == 3
+
+    def test_new_file_still_gets_boilerplate(self, tmp_path):
+        # A file that does not exist yet has no comments to preserve and must
+        # keep receiving the commented-out Security/Fallback template.
+        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+            save_config({"model": "test/fresh"})
+
+        written = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+        assert "redact_secrets" in written
+        assert yaml.safe_load(written)["model"] == "test/fresh"
+
+    def test_missing_ruamel_still_saves_and_warns(self, tmp_path, caplog):
+        # ruamel is a pinned dependency, but #27660 shows it can be absent from
+        # a venv. Persisting the config matters more than keeping its comments,
+        # so the write must still land — loudly, not silently.
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "# rationale that cannot survive without ruamel\nmodel: test/original\n",
+            encoding="utf-8",
+        )
+
+        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+            config = load_config()
+            config["model"] = "test/replacement"
+            with patch(
+                "utils.atomic_roundtrip_yaml_save",
+                side_effect=ImportError("No module named 'ruamel'"),
+            ):
+                with caplog.at_level("WARNING"):
+                    save_config(config)
+
+        written = config_path.read_text(encoding="utf-8")
+        assert yaml.safe_load(written)["model"] == "test/replacement"
+        assert "ruamel.yaml is unavailable" in caplog.text
 
 
 class TestConfigNormalizationDoesNotOverwriteUserValues:

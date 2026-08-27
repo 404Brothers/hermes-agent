@@ -283,9 +283,10 @@ _LAST_EXPANDED_CONFIG_BY_PATH: Dict[str, Any] = {}
 # load_config() returns a deepcopy of the cached value when the file
 # hasn't changed since the last load, skipping yaml.safe_load +
 # _deep_merge + _normalize_* + _expand_env_vars (~13 ms/call).
-# save_config() + migrate_config() write via atomic_yaml_write which
-# produces a fresh inode, so stat() sees a new mtime_ns and the next
-# load repopulates automatically — no explicit invalidation hook.
+# save_config() + migrate_config() write via atomic_yaml_write or
+# atomic_roundtrip_yaml_save; both replace the file, so stat() sees a
+# new mtime_ns and the next load repopulates automatically — no
+# explicit invalidation hook.
 # Cached tuple is (user_mtime_ns, user_size, managed_mtime_ns, managed_size,
 # merged_value, env_ref_snapshot) — the managed-file signature is folded in so
 # editing the managed-scope config.yaml invalidates the cache (see
@@ -4076,11 +4077,41 @@ def save_config(
         if not fb_is_valid:
             parts.append(_FALLBACK_COMMENT)
 
-        atomic_yaml_write(
-            config_path,
-            normalized,
-            extra_content="".join(parts) if parts else None,
-        )
+        # Comment-preserving write for an existing file. atomic_yaml_write
+        # re-serializes through PyYAML, which has no comment model, so every
+        # full save silently dropped the file's comments — including the
+        # commented-out boilerplate this function appends. Upstream #92554
+        # measured 93 comments lost in one session, among them the rationale
+        # for narrowing toolsets on security grounds; reproduced here
+        # 2026-08-27 when a v0→v39 profile migration stripped hand-written
+        # rationale from two profile configs. Complements open PR #72581,
+        # which round-trips `config set`/`unset` but not this writer.
+        #
+        # A brand-new file has nothing to preserve and still needs the
+        # boilerplate appended, so it keeps the PyYAML path. ruamel is a
+        # pinned dependency, but #27660 shows it can be absent from a venv in
+        # practice — saving the config matters more than keeping its comments,
+        # so fall back rather than refuse the write, and say so out loud.
+        wrote_roundtrip = False
+        if config_path.exists():
+            try:
+                from utils import atomic_roundtrip_yaml_save
+
+                atomic_roundtrip_yaml_save(config_path, normalized)
+                wrote_roundtrip = True
+            except ImportError:
+                logger.warning(
+                    "ruamel.yaml is unavailable; writing %s without comment "
+                    "preservation — comments in this file will be lost. "
+                    "Reinstall Hermes dependencies to restore it.",
+                    config_path,
+                )
+        if not wrote_roundtrip:
+            atomic_yaml_write(
+                config_path,
+                normalized,
+                extra_content="".join(parts) if parts else None,
+            )
         _secure_file(config_path)
         _RAW_CONFIG_CACHE.pop(str(config_path), None)
         _LAST_EXPANDED_CONFIG_BY_PATH[str(config_path)] = copy.deepcopy(current_normalized)

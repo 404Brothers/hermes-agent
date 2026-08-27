@@ -95,10 +95,10 @@ class TestSerializePayload:
         assert payload["extra"]["tool_call_id"] == "c-1"
 
     def test_pre_llm_call_carries_chat_id(self):
-        # Беседа и автор реплики — разные вещи: sender_id это личный user_id, а
-        # права и решения привязаны к чату. Хук согласования vault собирает
-        # команду для конкретной беседы, и пока chat_id не доезжал, он печатал
-        # плейсхолдер: с 19.08 по 27.08.2026 ни один голос не был записан.
+        # A conversation is not its author: sender_id is the individual
+        # user_id, while permissions and decisions are scoped to the chat. A
+        # hook that builds a chat-scoped command has no way to derive the
+        # group chat_id from sender_id.
         raw = shell_hooks._serialize_payload(
             "pre_llm_call",
             {
@@ -110,8 +110,8 @@ class TestSerializePayload:
         )
         payload = json.loads(raw)
         assert payload["session_id"] == "sess-1"
-        # chat_id не входит в _TOP_LEVEL_PAYLOAD_KEYS, значит живёт в extra —
-        # ровно там его читает agent-hooks/vault-consent-context.py.
+        # chat_id is not in _TOP_LEVEL_PAYLOAD_KEYS, so it lands under extra —
+        # exactly where the consent hook reads it.
         assert "chat_id" not in payload
         assert payload["extra"]["chat_id"] == "-5273503608"
         assert payload["extra"]["sender_id"] == "1975761365"
