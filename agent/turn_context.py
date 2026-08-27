@@ -1287,13 +1287,9 @@ def build_turn_context(
             platform=getattr(agent, "platform", None) or "",
             parent_session_id=getattr(agent, "_parent_session_id", None) or "",
             sender_id=getattr(agent, "_user_id", None) or "",
-            # chat_id отдельно от sender_id: sender_id — личный user_id автора
-            # реплики, а права и решения привязаны к беседе. Хук, которому нужно
-            # собрать команду для конкретного чата (согласование vault), из
-            # sender_id групповой chat_id восстановить не может. Без этого поля
-            # с 19.08 по 27.08.2026 ни один голос согласия не был записан: хук
-            # печатал плейсхолдер, модель подставляла в него мусор, CLI отбивал
-            # вызов кодом 77, а пользователю уходил выдуманный статус.
+            # Decisions are scoped to the conversation, not the author:
+            # sender_id is the individual user_id and a group chat_id cannot be
+            # derived from it. Hooks that build a chat-scoped command need this.
             chat_id=getattr(agent, "_chat_id", None) or "",
         )
         _ctx_parts: list[str] = []
