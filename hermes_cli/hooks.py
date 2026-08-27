@@ -116,6 +116,7 @@ _DEFAULT_PAYLOADS = {
     "pre_llm_call": {
         "session_id": "test-session", "user_message": "What is the weather?",
         "conversation_history": [], "is_first_turn": True, "model": "gpt-4", "platform": "cli",
+        "sender_id": "test-user", "chat_id": "-1001234567890",
     },
     "post_llm_call": {"session_id": "test-session", "model": "gpt-4", "platform": "cli"},
     "pre_verify": {

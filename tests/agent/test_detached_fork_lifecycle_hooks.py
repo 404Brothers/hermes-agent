@@ -35,6 +35,30 @@ def _apply_hooks(agent):
     )
 
 
+def test_pre_llm_call_hook_receives_chat_id():
+    """chat_id must reach pre_llm_call hooks separately from sender_id: sender_id is
+    the individual user_id, while permissions and decisions are scoped to the chat —
+    a hook building a chat-scoped command cannot derive group chat_id from sender_id."""
+    agent = _agent(persist_disabled=False)
+    agent._chat_id = "-5273503608"
+    agent._user_id = "1975761365"
+
+    with patch("hermes_cli.lifecycle.invoke_hook") as lifecycle_hook:
+        lifecycle_hook.return_value = []
+        _collect_pre_llm_call_context(
+            agent,
+            effective_task_id="task-1",
+            turn_id="turn-1",
+            original_user_message="hello",
+            messages=[{"role": "user", "content": "hello"}],
+            conversation_history=None,
+        )
+
+    kwargs = lifecycle_hook.call_args.kwargs
+    assert kwargs["chat_id"] == "-5273503608"
+    assert kwargs["sender_id"] == "1975761365"
+
+
 def test_persist_disabled_fork_skips_session_and_turn_lifecycle_hooks():
     agent = _agent(persist_disabled=True)
 
