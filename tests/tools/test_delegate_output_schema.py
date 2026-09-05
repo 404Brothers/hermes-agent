@@ -315,6 +315,58 @@ class TestRunSingleChildSchemaValidation:
 # ---------------------------------------------------------------------------
 
 
+class TestSchemaRetryRunsInChildContext:
+    """The bounded schema-retry turn is still the child's turn.
+
+    It executes on the parent thread after the child's future resolved, so it
+    is the one child turn that can leak the parent's dispatcher identity. In a
+    Kanban worker that means ``HERMES_KANBAN_TASK`` is legitimately in env, the
+    board stop-guard activates for the retry, and the child's finished answer
+    is discarded in favour of a reply to the board's synthetic message.
+    Observed live 2026-09-05 on card t_4c1b2a3a: two nudges inside a leaf.
+    """
+
+    def _observing_child(self, responses, observations):
+        from agent.delegation_context import is_delegated_child_context
+        from agent.kanban_stop import build_kanban_stop_nudge
+
+        class _Observing(_StubChild):
+            session_id = "leaf-session"
+
+            def run_conversation(self, user_message, task_id=None, **kwargs):
+                observations.append({
+                    "child_context": is_delegated_child_context(),
+                    "nudge": build_kanban_stop_nudge(messages=[], attempts=0),
+                })
+                return super().run_conversation(
+                    user_message, task_id=task_id, **kwargs
+                )
+
+        child = _Observing(responses)
+        child._delegate_output_schema = ADDRESS_SCHEMA
+        return child
+
+    def test_retry_turn_keeps_child_context_and_gets_no_nudge(self, monkeypatch):
+        monkeypatch.setenv("HERMES_KANBAN_TASK", "t_parent")
+        monkeypatch.delenv("HERMES_KANBAN_STOP_NUDGE", raising=False)
+
+        observations: list = []
+        child = self._observing_child(
+            ["not json at all", '{"city": "Oslo"}'], observations
+        )
+        entry = _run(child)
+
+        assert entry["schema_retries"] == 1, "retry turn did not run"
+        assert len(observations) == 2, "expected the main turn and one retry"
+        main, retry = observations
+        assert main["child_context"] is True
+        assert main["nudge"] is None
+        assert retry["child_context"] is True, \
+            "schema-retry ran outside delegated_child_context"
+        assert retry["nudge"] is None, \
+            "board stop-guard active during the child's schema-retry turn"
+
+
 def _make_mock_parent():
     parent = MagicMock()
     parent._delegate_depth = 0

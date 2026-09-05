@@ -3224,13 +3224,23 @@ def _run_single_child(
                 # verbatim (no schema re-paste — the child already holds
                 # the contract in its context).
                 _schema_retries = 1
+                from agent.delegation_context import delegated_child_context
+
                 _retry_result = None
                 try:
-                    _retry_result = child.run_conversation(
-                        user_message=build_retry_message(_schema_errors),
-                        task_id=child_task_id,
-                        stream_callback=_relay_child_text,
-                    )
+                    # Same child context as the main turn (see
+                    # _run_with_thread_capture above): this call runs on the
+                    # parent thread after the future resolved, so without the
+                    # marker the child is misread as the dispatcher-owned
+                    # Kanban worker whose HERMES_KANBAN_* vars are in env.
+                    with delegated_child_context(
+                        str(getattr(child, "session_id", "") or "")
+                    ):
+                        _retry_result = child.run_conversation(
+                            user_message=build_retry_message(_schema_errors),
+                            task_id=child_task_id,
+                            stream_callback=_relay_child_text,
+                        )
                 except Exception as _retry_exc:
                     logger.warning(
                         "Subagent %d schema-retry turn failed: %s",
