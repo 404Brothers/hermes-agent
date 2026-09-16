@@ -303,6 +303,19 @@ class TestSkillsList:
         assert filtered["count"] == 1
         assert filtered["skills"][0]["name"] == "skill-a"
 
+    def test_nonmatching_category_filter_keeps_categories(self, tmp_path):
+        """A category filter that matches nothing must still report which
+        categories exist — an empty result reads as "no such skill", and the
+        caller reimplements a skill that is installed under another category."""
+        with patch("tools.skills_tool.SKILLS_DIR", tmp_path):
+            _make_skill(tmp_path, "skill-a", category="media")
+            result = json.loads(skills_list(category="audio"))
+
+        assert result["success"] is True
+        assert result["skills"] == []
+        assert result["categories"] == ["media"]
+        assert "audio" in result["message"]
+
     def test_category_filter_finds_symlinked_category(self, tmp_path):
         external_root = tmp_path / "repo"
         skills_root = tmp_path / "skills"

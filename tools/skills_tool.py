@@ -246,14 +246,31 @@ def skills_list(category: str = None, task_id: str = None) -> str:
         if not all_skills:
             return _json({"success": True, "skills": [], "categories": [],
                           "message": "No skills found in skills/ directory."})
+
+        # Categories come from the FULL set, before any filtering. A filter that
+        # matched nothing must still tell the caller which categories exist —
+        # otherwise the empty result reads as "no such skill", and the caller
+        # reimplements a skill that is installed under a category it guessed
+        # wrong. Measured 2026-08-07: a model asked for category "audio", the
+        # skill lived in "media", got {skills: [], categories: []} back and
+        # wrote its own script instead.
+        categories = sorted(
+            {s.get("category") for s in all_skills if s.get("category")}
+        )
         if category:
             all_skills = [s for s in all_skills if s.get("category") == category]
         all_skills = _sort_skills(all_skills)
-        categories = sorted({s.get("category") for s in all_skills if s.get("category")})
-        return _json({
+        payload = {
             "success": True, "skills": all_skills, "categories": categories,
             "count": len(all_skills),
-            "hint": "Use skill_view(name) to see full content, tags, and linked files"})
+            "hint": "Use skill_view(name) to see full content, tags, and linked files"}
+        if category and not all_skills:
+            payload["message"] = (
+                f"No skills in category '{category}'. This does not mean the skill "
+                f"is missing — check 'categories' above and retry without the "
+                f"filter before concluding anything."
+            )
+        return _json(payload)
     except Exception as e:
         return tool_error(str(e), success=False)
 
