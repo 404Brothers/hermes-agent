@@ -403,7 +403,6 @@ def _roundtrip_load(path: Path):
     yaml_rt.preserve_quotes = True
     yaml_rt.allow_unicode = True
     yaml_rt.default_flow_style = False
-    yaml_rt.width = 4096
     yaml_rt.indent(mapping=2, sequence=4, offset=2)
     data = yaml_rt.load(path.read_text(encoding="utf-8")) if path.exists() else None
     return yaml_rt, data if isinstance(data, CommentedMap) else CommentedMap(data or {})
@@ -463,39 +462,6 @@ def atomic_roundtrip_yaml_update(path: Union[str, Path], key_path: str, value: A
 _YAML11_AMBIGUOUS_WORDS = frozenset({"y", "n", "yes", "no", "true", "false", "on", "off", "null", "~"})
 
 
-def _node_equal(existing: Any, incoming: Any) -> bool:
-    """Type-strict semantic equality for the round-trip merge guard.
-
-    Python's plain ``==`` is not enough here: it equates ``True == 1`` and
-    ``1.0 == 1``, which would silently skip a genuine write. Ruamel scalar
-    subclasses compare by content — every float round-trips as ``ScalarFloat``
-    and preserved quotes come back as ``SingleQuotedScalarString`` /
-    ``DoubleQuotedScalarString``, while the incoming state is plain PyYAML.
-    """
-    from ruamel.yaml.comments import CommentedMap
-
-    # bool is an int subclass: split it first, then int vs float.
-    if isinstance(existing, bool) or isinstance(incoming, bool):
-        return isinstance(existing, bool) and isinstance(incoming, bool) and existing == incoming
-    if isinstance(existing, int) and isinstance(incoming, int):
-        return existing == incoming
-    if isinstance(existing, float) and isinstance(incoming, float):
-        return existing == incoming
-    if isinstance(existing, (int, float)) or isinstance(incoming, (int, float)):
-        return False
-    if isinstance(existing, CommentedMap) and isinstance(incoming, dict):
-        if set(existing.keys()) != set(incoming.keys()):
-            return False
-        return all(_node_equal(existing[k], incoming[k]) for k in existing.keys())
-    if isinstance(existing, list) and isinstance(incoming, list):
-        if len(existing) != len(incoming):
-            return False
-        return all(_node_equal(e, i) for e, i in zip(existing, incoming))
-    if isinstance(existing, str) and isinstance(incoming, str):
-        return str(existing) == str(incoming)
-    return type(existing) is type(incoming) and existing == incoming
-
-
 def atomic_roundtrip_yaml_save(path: Union[str, Path], new_state: dict) -> None:
     """Persist a full config-state dict while preserving comments and ordering.
 
@@ -504,7 +470,7 @@ def atomic_roundtrip_yaml_save(path: Union[str, Path], new_state: dict) -> None:
     readable Unicode survive.
     """
     from ruamel.yaml.comments import CommentedMap
-    from ruamel.yaml.scalarstring import DoubleQuotedScalarString, SingleQuotedScalarString
+    from ruamel.yaml.scalarstring import DoubleQuotedScalarString
     from hermes_cli.config import require_readable_config_before_write
 
     path = Path(path)
@@ -516,46 +482,13 @@ def atomic_roundtrip_yaml_save(path: Union[str, Path], new_state: dict) -> None:
 
     def _merge(dst: CommentedMap, src: dict) -> None:
         for key, value in src.items():
-            if key not in dst:
-                if isinstance(value, dict):
-                    fresh = CommentedMap()
-                    dst[key] = fresh
-                    _merge(fresh, value)
-                elif isinstance(value, str) and value.lower() in _YAML11_AMBIGUOUS_WORDS:
-                    dst[key] = DoubleQuotedScalarString(value)
-                else:
-                    dst[key] = value
-                continue
-            current = dst[key]
             if isinstance(value, dict):
-                # Dicts always recurse: in-place updates keep the existing
-                # CommentedMap (and its comments), while a map-level equality
-                # skip would also skip a nested quoting guard — an unchanged
-                # map containing an unquoted ambiguous string must still be
-                # corrected.
+                current = dst.get(key)
                 if not isinstance(current, CommentedMap):
                     current = CommentedMap()
                     dst[key] = current
                 _merge(current, value)
-                continue
-            if _node_equal(current, value):
-                # Semantically unchanged scalar/sequence: keep the existing
-                # ruamel node with its comments, quoting and anchors. A
-                # CommentedSeq has no element-wise merge, so replacing it
-                # wholesale would drop every comment anchored inside a list
-                # element's mapping. One exception: an ambiguous YAML 1.1
-                # string must become quoted even when its content is unchanged
-                # — the skip must not defeat the quoting guard, or the next
-                # PyYAML (YAML 1.1) read flips an unquoted ``off`` to boolean
-                # ``False``.
-                if (
-                    isinstance(value, str)
-                    and value.lower() in _YAML11_AMBIGUOUS_WORDS
-                    and not isinstance(current, (SingleQuotedScalarString, DoubleQuotedScalarString))
-                ):
-                    dst[key] = DoubleQuotedScalarString(value)
-                continue
-            if isinstance(value, str) and value.lower() in _YAML11_AMBIGUOUS_WORDS:
+            elif isinstance(value, str) and value.lower() in _YAML11_AMBIGUOUS_WORDS:
                 dst[key] = DoubleQuotedScalarString(value)
             else:
                 dst[key] = value
