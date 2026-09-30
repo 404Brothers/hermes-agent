@@ -527,7 +527,13 @@ def atomic_roundtrip_yaml_save(path: Union[str, Path], new_state: dict, *,
 
     def _unchanged(current: Any, value: Any) -> bool:
         # ``True == 1`` in Python; a bool↔int flip is a real change for YAML readers.
-        return current == value and isinstance(current, bool) is isinstance(value, bool)
+        # 1 == 1.0 likewise; an int↔float flip must also be written (carried fix
+        # #95/75f659e1 contract: type-strict numeric flips, bools excluded above).
+        if isinstance(current, bool) or isinstance(value, bool):
+            return current == value and isinstance(current, bool) is isinstance(value, bool)
+        if isinstance(current, (int, float)) and isinstance(value, (int, float)):
+            return type(current) is type(value) and current == value
+        return current == value
 
     def _merge_seq(dst: CommentedSeq, src: list) -> None:
         # Element-wise so appending/editing one entry keeps the comments on its siblings.
